@@ -1,0 +1,3 @@
+agent_environment: main
+agent_name: crew-test-agent
+entrypoint_file: main.py
