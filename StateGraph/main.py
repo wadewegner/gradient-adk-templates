@@ -2,8 +2,8 @@ import os
 from enum import Enum
 from typing import NotRequired, Optional, TypedDict
 
+from gradient import AsyncGradient
 from gradient_adk import entrypoint
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
 
@@ -26,14 +26,35 @@ class SpicyStatus(str, Enum):
     NOT_SPICY = "NotSpicy"
 
 
+DEFAULT_MODEL = "openai-gpt-oss-120b"
+
+
+inference_client = AsyncGradient(
+    model_access_key=os.environ.get("GRADIENT_MODEL_ACCESS_KEY"),
+)
+
+
+async def run_inference(prompt: str, model: str = DEFAULT_MODEL) -> str:
+    inference_response = await inference_client.chat.completions.create(
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        model=model,
+    )
+    return inference_response.choices[0].message.content
+
+
 # N O D E S
-def generate_joke(state: State):
+async def generate_joke(state: State):
     """First LLM call to generate initial joke"""
 
-    msg = llm.invoke(
+    joke = await run_inference(
         f"Write a short joke about {state['topic']} in two sentences or less"
     )
-    return {"joke": msg.content}
+    return {"joke": joke}
 
 
 def add_spicy_note(state: State):
@@ -43,20 +64,22 @@ def add_spicy_note(state: State):
     return {"spicy_instruction": instruction}
 
 
-def improve_joke(state: State):
+async def improve_joke(state: State):
     """Second LLM call to improve the joke"""
 
-    msg = llm.invoke(f"make the joke funnier and quirky: {state['joke']}")
-    return {"improved_joke": msg.content}
+    improved_joke = await run_inference(
+        f"Make the joke funnier and quirky: {state['joke']}"
+    )
+    return {"improved_joke": improved_joke}
 
 
-def polish_joke(state: State):
+async def polish_joke(state: State):
     """Third LLM call for final polish"""
 
-    msg = llm.invoke(
+    final_joke = await run_inference(
         f"Remove any explanation of the joke or punchline: {state['improved_joke']}"
     )
-    return {"final_joke": msg.content}
+    return {"final_joke": final_joke}
 
 
 def check_punchline(state: State):
@@ -76,22 +99,10 @@ def check_if_spicy(state: State):
     if override is False:
         return SpicyStatus.NOT_SPICY
 
-    topic = state.get("topic", "")
-    if isinstance(topic, str) and "spicy" in topic.lower():
-        return SpicyStatus.SPICY
-    return SpicyStatus.NOT_SPICY
-
 
 def route_to_spice_check(state: State):
     """No-op node that allows separate spicy routing."""
     return {}
-
-
-llm = ChatOpenAI(
-    base_url="https://inference.do-ai-test.run/v1",
-    model="openai-gpt-oss-120b",
-    api_key=os.environ.get("GRADIENT_MODEL_ACCESS_KEY"),
-)
 
 
 @entrypoint
@@ -128,7 +139,7 @@ async def main(input):
     # Compile and run
     app = workflow.compile()
 
-    topic = input.get("topic")
+    topic = input.get("topic", "write the best joke ever")
     spicy_override = input.get("spicy")
 
     initial_state = {"topic": topic}
@@ -136,5 +147,4 @@ async def main(input):
         initial_state["spicy_override"] = spicy_override
 
     result = await app.ainvoke(initial_state)
-
-    return result["final_joke"]
+    return result.get("final_joke", "")
